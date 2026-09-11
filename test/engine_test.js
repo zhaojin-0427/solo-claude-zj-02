@@ -19,10 +19,10 @@ function approx(a, b, eps) { return Math.abs(a - b) <= (eps || 1e-6); }
   ok(p.feasible, "11s 可行");
   ok(approx(p.pos(0), 10) && approx(p.pos(11), 0), "端点 10->0");
   ok(p.pos(5) > p.pos(10), "单调下降");
-  // 三角形：2m @ v=1.2,a=0.5：达速距离 v²/a=2.88 > 2 => 三角形
-  const p2 = E.buildProfile(10, 8, 6, 1.2, 0.5); // 下降 2m / 6s
+  // 三角形：2m @ v=1.2,a=0.5：达速距离 v²/a=2.88 > 2；T=4s 时峰值 1.0 < 1.2 => 三角形
+  const p2 = E.buildProfile(10, 8, 4, 1.2, 0.5);
   ok(p2.kind === "triangle", "短行程退化为三角形");
-  ok(approx(p2.pos(3), 9, 0.02), "三角形中点≈中点位置");
+  ok(approx(p2.pos(2), 9, 0.02), "三角形中点≈中点位置");
   // 不可行：距离太大时间太短
   const p3 = E.buildProfile(0, 10, 2, 1.2, 0.5);
   ok(!p3.feasible, "2s 升 10m 不可行");
@@ -45,7 +45,7 @@ function demo() {
   p.battens.push(b1, b2, b3);
   p.occupancies.push(E.newOcc({ name: "通行", start: 4, duration: 12, x: 1.5, width: 7.5 }));
   p.cues.push(E.newCue({ battenId: b1.id, name: "大幕落", start: 0, duration: 8, fromPos: 10.5, toPos: 3 }));
-  p.cues.push(E.newCue({ battenId: b2.id, name: "景落", start: 4, duration: 8, fromPos: 10.5, toPos: 4 }));
+  p.cues.push(E.newCue({ battenId: b2.id, name: "景落", start: 4, duration: 8, fromPos: 10.5, toPos: 0.2 }));
   p.cues.push(E.newCue({ battenId: b3.id, name: "灯落", start: 6, duration: 6, fromPos: 10.8, toPos: 8 }));
   return E.normalizeProject(p);
 }
@@ -57,7 +57,7 @@ function demo() {
   for (const w of res.warnings) types[w.type] = (types[w.type] || 0) + 1;
   ok((types.overload || 0) >= 1, "检测到灯杆超载（80×1.15=92>70 且运行）: " + JSON.stringify(types));
   ok((types.passage || 0) >= 1, "检测到通行区未清空落景: " + JSON.stringify(types));
-  // b2 落到底：prop 底部 0-4=-4，pos 0 < lowLimit 0.3 -> 越程
+  // b2 目标 0.2m ＜ 下限位 0.3m -> 越程
   ok((types.overtravel || 0) >= 1, "检测到越程: " + JSON.stringify(types));
   // 三个动作 6-8s 并发
   ok((types.concurrency || 0) >= 1, "检测到并发超限: " + JSON.stringify(types));
@@ -90,17 +90,20 @@ function demo() {
 // ---------- 自动排程 ----------
 {
   const p = demo();
-  // 锁定大幕
-  p.cues[0].locked = true;
+  // 锁定灯杆微降（无通行约束，其余提示仍可重排）
+  p.cues[2].locked = true;
   const plans = E.planVariants(p);
   ok(plans.length === 4, "生成 4 个方案");
   ok(plans.some((pl) => pl.best), "有推荐方案");
   for (const pl of plans) {
     // 锁定提示起止不变
-    const lockedCue = pl.data.cues.find((c) => c.id === p.cues[0].id);
-    ok(lockedCue.start === 0 && lockedCue.duration === 8, pl.label + " 锁定提示不动");
-    // 通行冲突应被消除（排程器强制）
-    ok(!pl.metrics.byType || !pl.metrics.byType.passage, pl.label + " 无通行冲突");
+    const lockedCue = pl.data.cues.find((c) => c.id === p.cues[2].id);
+    ok(lockedCue.start === 6 && lockedCue.duration === 6, pl.label + " 锁定提示不动");
+    // 排程器强制规避：不应再产生并发/通行/重叠类冲突
+    const t = pl.metrics.byType || {};
+    ok(!t.passage, pl.label + " 无通行冲突");
+    ok(!t.concurrency, pl.label + " 无并发超限");
+    ok(!t.overlap, pl.label + " 无提示重叠");
   }
   const best = plans.find((pl) => pl.best);
   console.log("  推荐方案:", best.label, JSON.stringify(best.metrics));

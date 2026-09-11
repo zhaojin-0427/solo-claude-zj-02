@@ -261,17 +261,48 @@
     _drawBaseline() {
       const base = E.normalizeProject(this.baseline);
       const svg = this.svg;
-      const g = el("g", { opacity: "0.3" }, svg);
+      const g = el("g", { opacity: "0.55" }, svg);
+      const t = this.time;
       for (const b of base.battens) {
+        // 基线吊杆按同一播放时刻求解位置，随时间下降/上升
+        const st = E.battenState(base, b, t);
         const w = b.prop ? b.prop.width : b.length;
         const x0 = this.xToPx(b.x - w / 2), x1 = this.xToPx(b.x + w / 2);
-        const y = this.yToPx(b.initialPos);
-        el("rect", { x: x0 - 2, y: y - 3, width: x1 - x0 + 4, height: 5, fill: "none", stroke: "#d9b8ff" }, g);
+        const y = this.yToPx(st.pos);
+        // 吊绳
+        for (const tx of [0.25, 0.75]) {
+          const wx = x0 + (x1 - x0) * tx;
+          el("line", {
+            x1: wx, y1: this.offY, x2: wx, y2: y,
+            stroke: "#d9b8ff", "stroke-width": 1, "stroke-dasharray": "3 3",
+          }, g);
+        }
+        // 吊物外形（空心紫框）
+        if (b.prop) {
+          el("rect", {
+            x: x0, y: y, width: x1 - x0, height: b.prop.height * this.scale,
+            fill: "rgba(217,184,255,0.10)",
+            stroke: "#d9b8ff", "stroke-dasharray": "5 3", "stroke-width": 1.5,
+          }, g);
+        }
+        // 基线杆体
+        el("line", {
+          x1: x0 - 2, y1: y, x2: x1 + 2, y2: y,
+          stroke: "#d9b8ff", "stroke-width": 3, "stroke-linecap": "round",
+        }, g);
+        el("text", {
+          x: x0, y: y - 7, fill: "#d9b8ff", "font-size": 9,
+          text: "基线·" + b.name,
+        }, g);
       }
+      // 基线通行区（时段内才高亮）
       for (const occ of base.occupancies) {
+        const active = t >= occ.start && t <= occ.start + occ.duration;
         el("rect", {
           x: this.xToPx(occ.x), y: this.yToPx(0),
-          width: occ.width * this.scale, height: 3, fill: "#d9b8ff",
+          width: occ.width * this.scale, height: 4,
+          fill: active ? "#d9b8ff" : "none",
+          stroke: "#d9b8ff", "stroke-dasharray": "4 3", opacity: active ? 0.9 : 0.5,
         }, g);
       }
     },
@@ -308,8 +339,11 @@
       if (!this.analysis) return false;
       const t = this.time || 0;
       return this.analysis.warnings.some(
-        (w) => w.type === type && (w.battenIds || []).indexOf(bid) >= 0 &&
-          t >= w.start - 0.05 && t <= w.end + 0.05
+        (w) =>
+          w.type === type &&
+          ((w.battenIds || []).indexOf(bid) >= 0 || w.battenId === bid) &&
+          t >= w.start - 0.05 &&
+          t <= w.end + 0.05
       );
     },
 

@@ -238,6 +238,18 @@
 
   // ---------------------------------------------------------------- 侧视图/时间轴回调
   const dragSession = {};
+  let preDragSnap = null; // mousedown 时暂存，首次实际改动时入撤销栈
+  let dragActive = false; // 本次按下后是否真的改动过数据
+  function markDrag() {
+    if (preDragSnap) {
+      undoStack.push({ label: "拖动", data: preDragSnap });
+      if (undoStack.length > HISTORY_MAX) undoStack.shift();
+      redoStack = [];
+      updateUndoButtons();
+      preDragSnap = null;
+    }
+    dragActive = true;
+  }
 
   StageView.init($("#stageSvg"), {
     onSelect(sel) {
@@ -319,16 +331,15 @@
 
   // 拖动过程中只重算视图与检查，松手后落库
   function afterDrag() {
+    markDrag();
     const np = E.normalizeProject(state.project);
     state._np = np;
     state.analysis = E.analyze(state.project);
     renderViewsOnly();
     renderCheck(np);
   }
-  // 拖动开始时统一入撤销栈（见下方捕获监听）
 
-  // 真正发生拖动时才入撤销栈：mousedown 记录，mousemove 首次生效时提交
-  let preDragSnap = null;
+  // mousedown 暂存快照；真正发生移动时由 markDrag() 入栈，纯点击不入栈
   document.addEventListener(
     "mousedown",
     (e) => {
@@ -343,21 +354,7 @@
           (t.closest && t.closest(".cue-block") && !t.closest(".cue-locked")))
       ) {
         preDragSnap = snap();
-      }
-    },
-    true
-  );
-  document.addEventListener(
-    "mousemove",
-    () => {
-      if (preDragSnap && Object.keys(dragSession).length) {
-        undoStack.push({ label: "拖动", data: preDragSnap });
-        if (undoStack.length > HISTORY_MAX) undoStack.shift();
-        redoStack = [];
-        updateUndoButtons();
-        preDragSnap = null;
-      } else if (preDragSnap) {
-        // 未移动即松手，丢弃待提交快照
+        dragActive = false;
       }
     },
     true
@@ -366,7 +363,8 @@
     "mouseup",
     () => {
       preDragSnap = null;
-      if (Object.keys(dragSession).length) {
+      if (dragActive) {
+        dragActive = false;
         for (const k in dragSession) delete dragSession[k];
         render();
         scheduleSave();
@@ -381,8 +379,11 @@
     if (w.cueId) state.selection = { type: "cue", id: w.cueId };
     else if (w.battenIds && w.battenIds.length)
       state.selection = { type: "batten", id: w.battenIds[0] };
+    else if (w.battenId)
+      state.selection = { type: "batten", id: w.battenId };
     else if (w.occId) state.selection = { type: "occ", id: w.occId };
     render();
+    activateTabFor(state.selection);
     Timeline.scrollToTime(state.time);
     toast("跳转至 " + w.start.toFixed(1) + "s：" + w.message);
   }
@@ -997,7 +998,7 @@
     }));
     p.cues.push(E.newCue({
       battenId: b2.id, name: "城堡景降位", start: 4, duration: 8,
-      fromPos: 10.5, toPos: 4,
+      fromPos: 10.5, toPos: 0.2,
     }));
     p.cues.push(E.newCue({
       battenId: b3.id, name: "灯排微降", start: 6, duration: 6,
@@ -1005,7 +1006,7 @@
     }));
     p.cues.push(E.newCue({
       battenId: b2.id, name: "城堡景归位", start: 30, duration: 8,
-      fromPos: 4, toPos: 10.5,
+      fromPos: 0.2, toPos: 10.5,
     }));
     p.cues.push(E.newCue({
       battenId: b1.id, name: "大幕提升", start: 32, duration: 8,

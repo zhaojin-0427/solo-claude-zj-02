@@ -433,6 +433,53 @@
       }
     }
 
+    // ---- 通行区未清空便落景（按运动曲线精确求穿越区间）----
+    const depthOfWarn = (b) => [
+      b.x - (b.prop ? b.prop.width : b.length) / 2,
+      b.x + (b.prop ? b.prop.width : b.length) / 2,
+    ];
+    for (const c of proj.cues) {
+      if (c.dwell || c.toPos >= (c.fromPos == null ? 0 : c.fromPos)) continue;
+      const b = bmap[c.battenId];
+      if (!b || !b.prop) continue;
+      const [d0, d1] = depthOfWarn(b);
+      const entryRel = (() => {
+        const target = s.passageY + b.prop.height;
+        const pf = cueProfile(proj, c);
+        if (pf.pos(c.duration) > target + 1e-9) return null;
+        if (pf.pos(0) <= target + 1e-9) return 0;
+        let lo = 0, hi = c.duration;
+        for (let i = 0; i < 40; i++) {
+          const mid = (lo + hi) / 2;
+          if (pf.pos(mid) <= target) hi = mid;
+          else lo = mid;
+        }
+        return hi;
+      })();
+      if (entryRel == null) continue;
+      const wStart = c.start + entryRel;
+      const wEnd = c.start + c.duration;
+      for (const occ of proj.occupancies) {
+        if (!(d0 < occ.x + occ.width && occ.x < d1)) continue;
+        const o0 = occ.start, o1 = occ.start + occ.duration;
+        if (wStart < o1 - 1e-6 && o0 < wEnd - 1e-6) {
+          warnings.push({
+            type: "passage",
+            severity: "high",
+            battenId: b.id,
+            battenIds: [b.id],
+            cueId: c.id,
+            occId: occ.id,
+            start: Math.max(wStart, o0),
+            end: Math.min(wEnd, o1),
+            message:
+              b.name + " 在「" + occ.name + "」未清空时落入通行净空（" +
+              Math.max(wStart, o0).toFixed(1) + "s 起）",
+          });
+        }
+      }
+    }
+
     // ---- 深度方向有扫掠交集的吊杆对 ----
     const depthOf = (b) => [b.x - (b.prop ? b.prop.width : b.length) / 2, b.x + (b.prop ? b.prop.width : b.length) / 2];
     const pairs = [];
@@ -561,30 +608,7 @@
         }
       }
 
-      // 通行区未清空便落景
-      for (const st of states) {
-        if (!st.moving || !st.b.prop) continue;
-        const cue = st.cue;
-        const goingDown = cue.toPos < cue.fromPos;
-        if (!goingDown) continue;
-        const [d0, d1] = depthOf(st.b);
-        for (const occ of proj.occupancies) {
-          const within = t >= occ.start - 1e-9 && t <= occ.start + occ.duration + 1e-9;
-          if (!within) continue;
-          const overlapDepth = d0 < occ.x + occ.width && occ.x < d1;
-          if (overlapDepth && st.lowest < s.passageY - 1e-9) {
-            add(
-              "passage",
-              "high",
-              st.b.id + "|" + occ.id,
-              t,
-              [st.b.id],
-              st.b.name + " 在「" + occ.name + "」未清空时落入通行净空",
-              { cueId: cue.id, occId: occ.id }
-            );
-          }
-        }
-      }
+      // 通行区检测已在采样前按运动曲线精确完成（见上方）
     }
 
     // ---- 总时限 ----
@@ -632,14 +656,16 @@
     const h = batten.prop ? batten.prop.height : 0;
     const targetY = proj.stage.passageY + h;
     if (cue.toPos - h >= proj.stage.passageY - 1e-9) return null;
-    let entry = start + cue.duration;
-    for (let tau = 0; tau <= cue.duration + 1e-9; tau += DT) {
-      if (pf.pos(tau) <= targetY + 1e-9) {
-        entry = start + tau;
-        break;
-      }
+    // 单调下降曲线，二分求首次到达 targetY 的时刻，避免采样量化误差
+    if (pf.pos(cue.dwell ? 0 : cue.duration) > targetY + 1e-9) return null;
+    if (pf.pos(0) <= targetY + 1e-9) return start;
+    let lo = 0, hi = cue.dwell ? 0 : cue.duration;
+    for (let i = 0; i < 40; i++) {
+      const mid = (lo + hi) / 2;
+      if (pf.pos(mid) <= targetY) hi = mid;
+      else lo = mid;
     }
-    return entry;
+    return start + hi;
   }
 
   function planVariants(proj) {

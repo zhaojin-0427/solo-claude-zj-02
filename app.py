@@ -40,6 +40,7 @@ def close_db(exc):
 
 
 def init_db():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.executescript(
         """
@@ -234,7 +235,7 @@ def create_rehearsal(pid):
     cur = db.execute(
         "INSERT INTO rehearsals (project_id, name, data_json, metrics_json, created_at) "
         "VALUES (?,?,?,?,?)",
-        (name, json.dumps(data, ensure_ascii=False),
+        (pid, name, json.dumps(data, ensure_ascii=False),
          json.dumps(metrics, ensure_ascii=False), now),
     )
     db.commit()
