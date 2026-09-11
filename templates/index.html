@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>舞台吊杆换景沙盘</title>
+<link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <h1>舞台吊杆换景沙盘 <small>离线排练系统</small></h1>
+  <select id="projectSelect" title="项目"></select>
+  <button class="tiny" id="btnNewProject">＋ 新建</button>
+  <input type="text" id="projectName" placeholder="剧目名称" style="width:150px">
+  <span class="spacer"></span>
+  <button class="tiny" id="btnUndo" title="撤销 (Ctrl+Z)">↶ 撤销</button>
+  <button class="tiny" id="btnRedo" title="重做 (Ctrl+Y)">↷ 重做</button>
+  <button class="tiny" id="btnVersions">版本快照</button>
+  <button class="tiny" id="btnRehearsals">演练记录</button>
+  <button class="tiny" id="btnBaseline">叠加基线</button>
+  <button class="primary tiny" id="btnSave">保存</button>
+</header>
+
+<main>
+  <section id="stagePane">
+    <div id="baselineBar" class="baseline-bar" style="display:none"></div>
+    <div id="stageWrap">
+      <div id="stageHint">侧视图（纵轴为离地高度 m，横轴为舞台进深 m）｜单击吊杆/通行区选择，拖蓝点移动吊杆，拖绿点调整通行区</div>
+      <svg id="stageSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+
+    <div id="timelinePane">
+      <div class="tl-toolbar">
+        <button class="tiny primary" id="btnPlay">▶ 排练播放</button>
+        <button class="tiny" id="btnStop">■ 停止归零</button>
+        <label style="color:var(--muted)">速度</label>
+        <select id="playSpeed" style="background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:4px;padding:2px 4px">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+        </select>
+        <span class="clock" id="clockText">0.0 s</span>
+        <span class="spacer" style="flex:1"></span>
+        <button class="tiny" id="btnAddCue">＋ 升降提示</button>
+        <button class="tiny" id="btnAddDwell">＋ 停留</button>
+        <button class="tiny" id="btnAddOcc">＋ 演员通行</button>
+        <button class="tiny" id="btnAutoPlan">⚙ 自动调整未锁定提示</button>
+      </div>
+      <div class="tl-scroll" id="tlScroll">
+        <svg id="timelineSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
+    </div>
+  </section>
+
+  <aside id="sidePane">
+    <div class="tabs">
+      <div class="tab active" data-tab="setup">舞台</div>
+      <div class="tab" data-tab="battens">吊杆/吊物</div>
+      <div class="tab" data-tab="cue">提示</div>
+      <div class="tab" data-tab="check">检查</div>
+      <div class="tab" data-tab="plans">方案</div>
+    </div>
+    <div class="tab-body">
+      <div class="tab-page active" data-page="setup" id="pageSetup"></div>
+      <div class="tab-page" data-page="battens" id="pageBattens"></div>
+      <div class="tab-page" data-page="cue" id="pageCue"></div>
+      <div class="tab-page" data-page="check" id="pageCheck"></div>
+      <div class="tab-page" data-page="plans" id="pagePlans"></div>
+    </div>
+  </aside>
+</main>
+
+<!-- 版本快照模态框 -->
+<div class="modal-mask" id="modalVersions">
+  <div class="modal">
+    <header>项目版本快照 <span class="x" data-close>✕</span></header>
+    <div class="body">
+      <div class="btn-row">
+        <input type="text" id="versionLabel" placeholder="快照说明，如：导演确认第一幕" style="flex:1;background:var(--bg2);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:5px 8px">
+        <button id="btnSaveVersion">拍摄当前快照</button>
+      </div>
+      <div id="versionList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 演练记录模态框 -->
+<div class="modal-mask" id="modalRehearsals">
+  <div class="modal">
+    <header>演练记录 <span class="x" data-close>✕</span></header>
+    <div class="body">
+      <div class="btn-row">
+        <input type="text" id="rehearsalName" placeholder="本次演练名称" style="flex:1;background:var(--bg2);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:5px 8px">
+        <button id="btnSaveRehearsal">保存当前演练结果</button>
+      </div>
+      <div id="rehearsalList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 新建项目模态框 -->
+<div class="modal-mask" id="modalNew">
+  <div class="modal" style="width:420px">
+    <header>新建剧目项目 <span class="x" data-close>✕</span></header>
+    <div class="body">
+      <div class="form-row"><label>项目名称</label><input type="text" id="newProjName" value="未命名剧目"></div>
+      <div class="form-row"><label>初始模板</label>
+        <select id="newProjTpl">
+          <option value="empty">空白舞台</option>
+          <option value="demo">示例：三吊杆一幕换景</option>
+        </select>
+      </div>
+    </div>
+    <footer>
+      <button data-close>取消</button>
+      <button class="primary" id="btnConfirmNew">创建</button>
+    </footer>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="/static/js/engine.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/stage-view.js"></script>
+<script src="/static/js/timeline.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>
