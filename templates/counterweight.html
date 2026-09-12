@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>配重换装单 —— 舞台吊杆换景沙盘</title>
+<link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <h1>配重换装单 <small>手动吊杆 · 按场次装卸</small></h1>
+  <a class="tiny link-btn" href="/">← 换景沙盘</a>
+  <select id="sheetSelect" title="换装单"></select>
+  <button class="tiny" id="btnNewSheet">＋ 新建</button>
+  <input type="text" id="sheetName" placeholder="换装单名称" style="width:150px">
+  <input type="text" id="sheetScene" placeholder="场次，如：一幕→二幕" style="width:130px">
+  <span id="statusPill" class="status-pill st-draft">草稿</span>
+  <span class="spacer"></span>
+  <span id="statusActions" style="display:inline-flex;gap:6px"></span>
+  <button class="tiny danger" id="btnDelete">删除</button>
+  <button class="primary tiny" id="btnSave">保存</button>
+</header>
+
+<main>
+  <section id="stagePane">
+    <div id="readonlyBar" class="readonly-bar" style="display:none"></div>
+    <div id="arborWrap">
+      <div id="stageHint">配重架正视图｜灰=管身自重，蓝=当前吊物，绿=已装砖块，绿虚线=目标配重；右侧小柱为配重架位置（绿点=已到装卸位）。点击列选择吊杆行。</div>
+      <div class="arbor-scroll"><svg id="arborSvg" xmlns="http://www.w3.org/2000/svg"></svg></div>
+    </div>
+
+    <div id="timelinePane">
+      <div class="tl-toolbar">
+        <button class="tiny primary" id="btnPlan">⚙ 自动编排步骤</button>
+        <button class="tiny" id="btnClearSteps">清空步骤</button>
+        <span id="staleHint" class="stale-hint" style="display:none">⚠ 步骤与当前目标不符，建议重新编排</span>
+        <span id="execBar" style="display:none">
+          <span id="execNext"></span>
+          <button class="tiny primary" id="btnConfirm">✓ 确认下一步</button>
+          <button class="tiny" id="btnUndoStep">↩ 撤回最后一步</button>
+        </span>
+        <span class="spacer" style="flex:1"></span>
+        <span class="clock" id="replayClock">–</span>
+      </div>
+      <div class="tl-scroll" id="cwTlScroll">
+        <svg id="cwTimelineSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
+    </div>
+  </section>
+
+  <aside id="sidePane">
+    <div class="tabs">
+      <div class="tab active" data-tab="lines">吊杆行</div>
+      <div class="tab" data-tab="stock">参数/库存</div>
+      <div class="tab" data-tab="check">检查</div>
+      <div class="tab" data-tab="replay">回放/对照</div>
+    </div>
+    <div class="tab-body">
+      <div class="tab-page active" data-page="lines" id="pageLines"></div>
+      <div class="tab-page" data-page="stock" id="pageStock"></div>
+      <div class="tab-page" data-page="check" id="pageCheck"></div>
+      <div class="tab-page" data-page="replay" id="pageReplay"></div>
+    </div>
+  </aside>
+</main>
+
+<!-- 新建换装单模态框 -->
+<div class="modal-mask" id="modalNew">
+  <div class="modal" style="width:440px">
+    <header>新建配重换装单 <span class="x" data-close>✕</span></header>
+    <div class="body">
+      <div class="form-row"><label>单据名称</label><input type="text" id="newSheetName" value="未命名换装单"></div>
+      <div class="form-row"><label>场次</label><input type="text" id="newSheetScene" placeholder="如：第一幕 → 第二幕"></div>
+      <div class="form-row"><label>初始内容</label>
+        <select id="newSheetTpl">
+          <option value="empty">空白换装单</option>
+          <option value="demo">演示：三杆配重换装（已编排）</option>
+        </select>
+      </div>
+      <div class="form-row"><label>引用沙盘项目</label><select id="newSheetProject"></select></div>
+    </div>
+    <footer>
+      <button data-close>取消</button>
+      <button class="primary" id="btnConfirmNew">创建</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 对照模态框 -->
+<div class="modal-mask" id="modalCompare">
+  <div class="modal" style="width:640px">
+    <header>换装单对照 <span class="x" data-close>✕</span></header>
+    <div class="body" id="compareBody"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="/static/js/engine.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/cw-engine.js"></script>
+<script src="/static/js/cw-view.js"></script>
+<script src="/static/js/cw-app.js"></script>
+</body>
+</html>

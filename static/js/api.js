@@ -33,5 +33,19 @@
       }),
     getRehearsal: (rid) => req("/api/rehearsals/" + rid),
     deleteRehearsal: (rid) => req("/api/rehearsals/" + rid, { method: "DELETE" }),
+
+    // ---- 配重换装单 ----
+    listCwSheets: () => req("/api/cw/sheets"),
+    createCwSheet: (name, scene, projectId, data, metrics) =>
+      req("/api/cw/sheets", {
+        method: "POST",
+        body: JSON.stringify({ name, scene, projectId, data, metrics }),
+      }),
+    getCwSheet: (id) => req("/api/cw/sheets/" + id),
+    saveCwSheet: (id, payload) =>
+      req("/api/cw/sheets/" + id, { method: "PUT", body: JSON.stringify(payload) }),
+    deleteCwSheet: (id) => req("/api/cw/sheets/" + id, { method: "DELETE" }),
+    confirmCwStep: (id) => req("/api/cw/sheets/" + id + "/confirm", { method: "POST" }),
+    undoCwStep: (id) => req("/api/cw/sheets/" + id + "/undo", { method: "POST" }),
   };
 })(window);
