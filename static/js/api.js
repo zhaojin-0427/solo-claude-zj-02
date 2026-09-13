@@ -47,5 +47,17 @@
     deleteCwSheet: (id) => req("/api/cw/sheets/" + id, { method: "DELETE" }),
     confirmCwStep: (id) => req("/api/cw/sheets/" + id + "/confirm", { method: "POST" }),
     undoCwStep: (id) => req("/api/cw/sheets/" + id + "/undo", { method: "POST" }),
+
+    // ---- 紧急停车演练单 ----
+    listEstopDrills: () => req("/api/estop/drills"),
+    createEstopDrill: (name, projectId, versionId, data, metrics) =>
+      req("/api/estop/drills", {
+        method: "POST",
+        body: JSON.stringify({ name, projectId, versionId, data, metrics }),
+      }),
+    getEstopDrill: (id) => req("/api/estop/drills/" + id),
+    saveEstopDrill: (id, payload) =>
+      req("/api/estop/drills/" + id, { method: "PUT", body: JSON.stringify(payload) }),
+    deleteEstopDrill: (id) => req("/api/estop/drills/" + id, { method: "DELETE" }),
   };
 })(window);

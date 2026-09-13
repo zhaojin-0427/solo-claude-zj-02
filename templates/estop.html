@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>紧急停车演练单 —— 舞台吊杆换景沙盘</title>
+<link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <h1>紧急停车演练单 <small>换景急停 · 逐杆制动推演</small></h1>
+  <a class="tiny link-btn" href="/">← 换景沙盘</a>
+  <a class="tiny link-btn" href="/cw">配重换装单</a>
+  <select id="drillSelect" title="演练单"></select>
+  <button class="tiny" id="btnNewDrill">＋ 新建</button>
+  <input type="text" id="drillName" placeholder="演练单名称" style="width:150px">
+  <span id="statusPill" class="status-pill st-draft">草稿</span>
+  <span id="staleBadge" class="stale-badge" style="display:none" title="来源版本已变化，本单仍按抓取时的数据推演">⚠ 来源已过期</span>
+  <span class="spacer"></span>
+  <span id="statusActions" style="display:inline-flex;gap:6px"></span>
+  <button class="tiny danger" id="btnDelete">删除</button>
+  <button class="primary tiny" id="btnSave">保存</button>
+</header>
+
+<main>
+  <section id="stagePane">
+    <div id="readonlyBar" class="readonly-bar" style="display:none"></div>
+    <div id="staleBar" class="stale-bar" style="display:none">
+      <span>⚠ 来源沙盘版本已变化，本演练单仍按抓取时的数据推演（仅标记过期，不自动更新）。</span>
+      <button class="tiny" id="btnRecapture">重新读取来源版本</button>
+    </div>
+    <div id="esStageWrap">
+      <div id="stageHint">侧视图｜实杆=急停推演位置，紫虚影=原计划位置，红刻度=急停停止高度；绿色地带为演员通行区。点击吊杆选择。</div>
+      <svg id="esStageSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+
+    <div id="chartPane">
+      <div class="tl-toolbar">
+        <label class="tl-field">触发时刻 <input type="number" id="triggerNum" step="0.1" min="0"> s</label>
+        <label class="tl-field">总控响应延迟 <input type="number" id="respDelay" step="0.1" min="0"> s</label>
+        <button class="tiny primary" id="btnScan">⚡ 扫描危险触发点</button>
+        <span class="spacer" style="flex:1"></span>
+        <span class="clock" id="cursorClock">–</span>
+      </div>
+      <div class="tl-scroll" id="esChartScroll">
+        <svg id="esChartSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
+    </div>
+  </section>
+
+  <aside id="sidePane">
+    <div class="tabs">
+      <div class="tab active" data-tab="trigger">触发参数</div>
+      <div class="tab" data-tab="scan">扫描</div>
+      <div class="tab" data-tab="check">告警</div>
+      <div class="tab" data-tab="cards">检查卡</div>
+      <div class="tab" data-tab="replay">回放/对照</div>
+    </div>
+    <div class="tab-body">
+      <div class="tab-page active" data-page="trigger" id="pageTrigger"></div>
+      <div class="tab-page" data-page="scan" id="pageScan"></div>
+      <div class="tab-page" data-page="check" id="pageCheck"></div>
+      <div class="tab-page" data-page="cards" id="pageCards"></div>
+      <div class="tab-page" data-page="replay" id="pageReplay"></div>
+    </div>
+  </aside>
+</main>
+
+<!-- 新建演练单模态框 -->
+<div class="modal-mask" id="modalNew">
+  <div class="modal" style="width:440px">
+    <header>新建紧急停车演练单 <span class="x" data-close>✕</span></header>
+    <div class="body">
+      <div class="form-row"><label>单据名称</label><input type="text" id="newDrillName" value="未命名演练单"></div>
+      <div class="form-row"><label>初始内容</label>
+        <select id="newDrillTpl">
+          <option value="demo">演示：三杆换景急停（内置沙盘）</option>
+          <option value="empty">空白（从沙盘版本读取）</option>
+        </select>
+      </div>
+      <div class="form-row"><label>沙盘项目</label><select id="newDrillProject"></select></div>
+      <div class="form-row"><label>来源版本</label><select id="newDrillVersion"></select></div>
+    </div>
+    <footer>
+      <button data-close>取消</button>
+      <button class="primary" id="btnConfirmNew">创建</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 对照模态框 -->
+<div class="modal-mask" id="modalCompare">
+  <div class="modal" style="width:640px">
+    <header>演练单对照 <span class="x" data-close>✕</span></header>
+    <div class="body" id="compareBody"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="/static/js/engine.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/estop-engine.js"></script>
+<script src="/static/js/estop-view.js"></script>
+<script src="/static/js/estop-app.js"></script>
+</body>
+</html>

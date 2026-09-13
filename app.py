@@ -77,6 +77,18 @@ def init_db():
             created_at   INTEGER NOT NULL,
             updated_at   INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS estop_drills (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT NOT NULL,
+            status       TEXT NOT NULL DEFAULT 'draft',
+            project_id   INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+            -- 逻辑引用沙盘版本：不加外键，版本被删除时保留引用以标记过期
+            version_id   INTEGER,
+            data_json    TEXT NOT NULL,
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            created_at   INTEGER NOT NULL,
+            updated_at   INTEGER NOT NULL
+        );
         """
     )
     conn.commit()
@@ -104,6 +116,11 @@ def index():
 @app.route("/cw")
 def counterweight():
     return render_template("counterweight.html")
+
+
+@app.route("/estop")
+def estop():
+    return render_template("estop.html")
 
 
 # --------------------------------------------------------------------------
@@ -577,6 +594,162 @@ def undo_cw_step(sid):
     )
     db.commit()
     return jsonify({"ok": True, "stepId": last.get("id"), "data": data})
+
+
+# --------------------------------------------------------------------------
+# 紧急停车演练单
+# --------------------------------------------------------------------------
+ESTOP_STATUS = ("draft", "done")
+# 状态流转：草稿 → 已确认（冻结）；已确认为终态，只可回放对照或删除
+ESTOP_TRANSITIONS = {
+    "draft": {"done"},
+    "done": set(),
+}
+
+
+def row_to_drill(row):
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "status": row["status"],
+        "projectId": row["project_id"],
+        "versionId": row["version_id"],
+        "data": json.loads(row["data_json"]),
+        "metrics": json.loads(row["metrics_json"]),
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def get_drill_row(db, did):
+    return db.execute("SELECT * FROM estop_drills WHERE id=?", (did,)).fetchone()
+
+
+@app.get("/api/estop/drills")
+def list_estop_drills():
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, name, status, project_id, version_id, metrics_json, updated_at "
+        "FROM estop_drills ORDER BY updated_at DESC"
+    ).fetchall()
+    return jsonify(
+        [
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "status": r["status"],
+                "projectId": r["project_id"],
+                "versionId": r["version_id"],
+                "metrics": json.loads(r["metrics_json"]),
+                "updatedAt": r["updated_at"],
+            }
+            for r in rows
+        ]
+    )
+
+
+@app.post("/api/estop/drills")
+def create_estop_drill():
+    body = request.get_json(force=True) or {}
+    name = (body.get("name") or "未命名演练单").strip()[:80]
+    data = body.get("data") or {}
+    metrics = body.get("metrics") or {}
+    project_id = body.get("projectId")
+    version_id = body.get("versionId")
+    now = int(time.time() * 1000)
+    db = get_db()
+    cur = db.execute(
+        "INSERT INTO estop_drills (name, status, project_id, version_id, data_json, "
+        "metrics_json, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        (
+            name,
+            "draft",
+            project_id,
+            version_id,
+            json.dumps(data, ensure_ascii=False),
+            json.dumps(metrics, ensure_ascii=False),
+            now,
+            now,
+        ),
+    )
+    db.commit()
+    return jsonify({"id": cur.lastrowid, "name": name, "status": "draft"})
+
+
+@app.get("/api/estop/drills/<int:did>")
+def get_estop_drill(did):
+    db = get_db()
+    row = get_drill_row(db, did)
+    if row is None:
+        return jsonify({"error": "演练单不存在"}), 404
+    return jsonify(row_to_drill(row))
+
+
+@app.put("/api/estop/drills/<int:did>")
+def update_estop_drill(did):
+    body = request.get_json(force=True) or {}
+    db = get_db()
+    row = get_drill_row(db, did)
+    if row is None:
+        return jsonify({"error": "演练单不存在"}), 404
+    cur_status = row["status"]
+    if cur_status == "done":
+        return jsonify({"error": "演练单已确认冻结，不可改写"}), 409
+
+    old_data = json.loads(row["data_json"])
+    new_status = body.get("status") or cur_status
+    if new_status not in ESTOP_STATUS:
+        return jsonify({"error": "未知状态：" + str(new_status)}), 400
+    if new_status != cur_status and new_status not in ESTOP_TRANSITIONS[cur_status]:
+        return jsonify(
+            {"error": "不允许从「%s」直接流转到「%s」" % (cur_status, new_status)}
+        ), 409
+
+    new_data = body.get("data", old_data)
+    # 确认时冻结输入快照：触发时刻、来源版本、延迟与各杆制动参数
+    if new_status == "done":
+        if not isinstance(new_data, dict) or not new_data.get("project"):
+            return jsonify({"error": "缺少沙盘数据，不能确认冻结"}), 400
+        new_data = dict(new_data)
+        new_data["snapshot"] = {
+            "frozenAt": int(time.time() * 1000),
+            "trigger": new_data.get("trigger"),
+            "versionId": new_data.get("versionId"),
+            "versionLabel": new_data.get("versionLabel"),
+            "fingerprint": new_data.get("fingerprint"),
+            "params": new_data.get("params"),
+            "brakes": new_data.get("brakes"),
+        }
+
+    name = (body.get("name") or row["name"])[:80]
+    metrics = body.get("metrics", json.loads(row["metrics_json"]))
+    project_id = body.get("projectId", row["project_id"])
+    version_id = body.get("versionId", row["version_id"])
+    now = int(time.time() * 1000)
+    db.execute(
+        "UPDATE estop_drills SET name=?, status=?, project_id=?, version_id=?, "
+        "data_json=?, metrics_json=?, updated_at=? WHERE id=?",
+        (
+            name,
+            new_status,
+            project_id,
+            version_id,
+            json.dumps(new_data, ensure_ascii=False),
+            json.dumps(metrics, ensure_ascii=False),
+            now,
+            did,
+        ),
+    )
+    db.commit()
+    return jsonify({"ok": True, "status": new_status, "updatedAt": now})
+
+
+@app.delete("/api/estop/drills/<int:did>")
+def delete_estop_drill(did):
+    db = get_db()
+    db.execute("DELETE FROM estop_drills WHERE id=?", (did,))
+    db.commit()
+    return jsonify({"ok": True})
 
 
 init_db()
