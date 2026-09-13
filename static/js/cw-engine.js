@@ -139,7 +139,22 @@
         doneAt: s.doneAt == null ? null : num(s.doneAt, null),
         auto: !!s.auto,
         seq: s.seq == null ? null : Math.round(num(s.seq, 0)),
+        // 执行时快照（确认步骤时由服务端写入）：历史状态不随临时变更改写
+        snap:
+          s.snap && typeof s.snap === "object"
+            ? {
+                bricks: num(s.snap.bricks, 0),
+                stageW: num(s.snap.stageW, 0),
+                cwW: num(s.snap.cwW, 0),
+                imbalance: num(s.snap.imbalance, 0),
+                remain: num(s.snap.remain, 0),
+                brickW: num(s.snap.brickW, 0),
+              }
+            : null,
       })),
+      // 进入执行时的各行基准（用于回放还原历史；临时变更前的舞台侧重量）
+      execBase:
+        sheet.execBase && typeof sheet.execBase === "object" ? sheet.execBase : null,
       name: sheet.name || "未命名换装单",
     };
     for (const k of Object.keys(defaultParams()))
@@ -228,38 +243,53 @@
       const brick = brickOf(sheet, line);
       const w = brick ? brick.weight : 0;
       const end = step.start + step.duration;
+      // 已完成步骤以执行时快照为准，不被临时变更改写
+      const snap = step.status === "done" && step.snap ? step.snap : null;
 
       if (step.kind === "add" || step.kind === "remove") {
         const delta = step.kind === "add" ? step.count : -step.count;
-        // 吊杆未制动
-        if (!line.braked) {
-          warnings.push({
-            type: "brake", severity: "high", lineId: line.id, stepId: step.id,
-            start: step.start, end,
-            message: line.name + " 装卸砖时吊杆未制动",
-          });
+        if (!snap) {
+          // 吊杆未制动 / 配重架未到装卸位：仅对未执行步骤按现时状态检查
+          if (!line.braked) {
+            warnings.push({
+              type: "brake", severity: "high", lineId: line.id, stepId: step.id,
+              start: step.start, end,
+              message: line.name + " 装卸砖时吊杆未制动",
+            });
+          }
+          if (Math.abs(line.arborPos - p.loadingPos) > p.posTolerance + 1e-9) {
+            warnings.push({
+              type: "position", severity: "high", lineId: line.id, stepId: step.id,
+              start: step.start, end,
+              message:
+                line.name + " 配重架位于 " + line.arborPos.toFixed(2) + "m，未到装卸位 " +
+                p.loadingPos.toFixed(2) + "m",
+            });
+          }
+          bricksNow[line.id] += delta;
+          // 已装砖块不足
+          if (bricksNow[line.id] < 0) {
+            warnings.push({
+              type: "brick_short", severity: "high", lineId: line.id, stepId: step.id,
+              start: step.start, end,
+              message: line.name + " 卸下砖块超过已装数量",
+            });
+            bricksNow[line.id] = Math.max(0, bricksNow[line.id]);
+          }
+        } else {
+          bricksNow[line.id] += delta;
+          if (bricksNow[line.id] < 0) bricksNow[line.id] = 0;
         }
-        // 配重架未到装卸位
-        if (Math.abs(line.arborPos - p.loadingPos) > p.posTolerance + 1e-9) {
-          warnings.push({
-            type: "position", severity: "high", lineId: line.id, stepId: step.id,
-            start: step.start, end,
-            message:
-              line.name + " 配重架位于 " + line.arborPos.toFixed(2) + "m，未到装卸位 " +
-              p.loadingPos.toFixed(2) + "m",
-          });
-        }
-        bricksNow[line.id] += delta;
-        // 已装砖块不足
-        if (bricksNow[line.id] < 0) {
-          warnings.push({
-            type: "brick_short", severity: "high", lineId: line.id, stepId: step.id,
-            start: step.start, end,
-            message: line.name + " 卸下砖块超过已装数量",
-          });
-          bricksNow[line.id] = Math.max(0, bricksNow[line.id]);
-        }
-        const st = snapshot(sheet, line, bricksNow[line.id]);
+        const st = snap
+          ? {
+              lineId: line.id,
+              bricks: snap.bricks,
+              stageW: snap.stageW,
+              cwW: snap.cwW,
+              imbalance: snap.imbalance,
+              remain: snap.remain,
+            }
+          : snapshot(sheet, line, bricksNow[line.id]);
         stepStates[step.id] = st;
         trackPeak(st);
         // 超容量
@@ -271,7 +301,7 @@
               line.name + " 配重侧 " + st.cwW + "kg 超出配重架容量 " + line.arborCapacity + "kg",
           });
         }
-        // 库存不足（按规格合并）
+        // 库存不足（按规格合并，始终按当前在装量评估）
         checkStock(sheet, bricksNow, warnings, step, end);
         // 失衡超限（装卸/复核为中等提示）
         if (st.imbalance > p.maxImbalance + 1e-9) {
@@ -284,7 +314,16 @@
           });
         }
       } else {
-        const st = snapshot(sheet, line, bricksNow[line.id]);
+        const st = snap
+          ? {
+              lineId: line.id,
+              bricks: snap.bricks,
+              stageW: snap.stageW,
+              cwW: snap.cwW,
+              imbalance: snap.imbalance,
+              remain: snap.remain,
+            }
+          : snapshot(sheet, line, bricksNow[line.id]);
         stepStates[step.id] = st;
         trackPeak(st);
         if (step.kind === "test" && st.imbalance > p.maxImbalance + 1e-9) {
@@ -311,6 +350,9 @@
 
     // 末态：配重目标核对
     const finalStates = {};
+    const completion0 = sheet.steps.length
+      ? Math.max(...sheet.steps.map((s) => s.start + s.duration))
+      : 0;
     for (const l of sheet.lines) {
       const st = snapshot(sheet, l, bricksNow[l.id]);
       finalStates[l.id] = st;
@@ -326,14 +368,25 @@
         });
       }
       if (!l.bricksLocked && bricksNow[l.id] !== tgt) {
-        const end = sheet.steps.length
-          ? Math.max(...sheet.steps.map((s) => s.start + s.duration))
-          : 0;
         warnings.push({
           type: "target", severity: "medium", lineId: l.id, stepId: null,
-          start: end, end,
+          start: completion0, end: completion0,
           message:
             l.name + " 最终 " + bricksNow[l.id] + " 块，未达目标配重 " + tgt + " 块",
+        });
+      }
+      // 有装卸操作但终态失衡超范围且未安排试运行
+      const hasBrickOps = sheet.steps.some(
+        (s) => s.lineId === l.id && (s.kind === "add" || s.kind === "remove")
+      );
+      const hasTest = sheet.steps.some((s) => s.lineId === l.id && s.kind === "test");
+      if (hasBrickOps && !hasTest && st.imbalance > p.maxImbalance + 1e-9) {
+        warnings.push({
+          type: "no_test", severity: "medium", lineId: l.id, stepId: null,
+          start: completion0, end: completion0,
+          message:
+            l.name + " 终态失衡 " + st.imbalance.toFixed(0) + "kg 超出允许 ±" +
+            p.maxImbalance + "kg，未安排试运行",
         });
       }
     }
@@ -443,10 +496,21 @@
         delta += delta > 0 ? -n : n;
       }
       if (ops.length) {
+        const imbalance0 = Math.abs(stageWeight(l) - (cur[l.id] || 0) * brick.weight);
+        // 允许失衡范围参与编排：计算该行连续多少步能回到允许范围内
+        let b = cur[l.id] || 0;
+        let safety = 0;
+        for (const o of ops) {
+          if (Math.abs(stageWeight(l) - b * brick.weight) <= p.maxImbalance + 1e-9) break;
+          b += o;
+          safety++;
+        }
         queues.push({
           line: l,
           ops,
-          imbalance0: Math.abs(stageWeight(l) - (cur[l.id] || 0) * brick.weight),
+          imbalance0,
+          excess: Math.max(0, imbalance0 - p.maxImbalance),
+          safety,
         });
       }
     }
@@ -463,12 +527,27 @@
       if (adds > b.count - inUse) pressure.add(b.id);
     }
 
-    // 排序：有库存压力的规格先卸；其余按当前失衡量从大到小轮转，
-    // 让失衡最大的吊杆优先回到允许范围内
+    // 排序：
+    // 1) 有库存压力的规格先卸后装；
+    // 2) 超出允许失衡范围的行优先，并连续排入回到范围内所需的步数
+    //    （允许范围越紧，越多行的校正步骤会被前置、成组执行）；
+    // 3) 其余按当前失衡量从大到小轮转。
     const ordered = [];
     for (const q of queues) {
       if (!pressure.has(brickOf(sheet, q.line).id)) continue;
-      while (q.ops.length && q.ops[0] < 0) ordered.push({ line: q.line, count: q.ops.shift() });
+      while (q.ops.length && q.ops[0] < 0) {
+        ordered.push({ line: q.line, count: q.ops.shift() });
+        q.safety = Math.max(0, q.safety - 1);
+      }
+    }
+    const phase1 = queues
+      .filter((q) => q.safety > 0 && q.ops.length)
+      .sort((a, b) => b.excess - a.excess || b.imbalance0 - a.imbalance0);
+    for (const q of phase1) {
+      while (q.safety > 0 && q.ops.length) {
+        ordered.push({ line: q.line, count: q.ops.shift() });
+        q.safety--;
+      }
     }
     const qs = queues.filter((q) => q.ops.length).sort((a, b) => b.imbalance0 - a.imbalance0);
     while (qs.length) {
@@ -511,7 +590,7 @@
       lineAvail[op.line.id] = pick.start + dur;
       lastStation[op.line.id] = pick.station;
     }
-    // 每行砖块操作完成后：复核 → 试运行
+    // 每行砖块操作完成后：复核 →（终态失衡进入允许范围才排）试运行
     const linesDone = queues
       .map((q) => q.line)
       .sort((a, b) => (lineAvail[a.id] || 0) - (lineAvail[b.id] || 0));
@@ -525,13 +604,20 @@
         })
       );
       t += p.reviewSeconds;
-      newSteps.push(
-        newStep({
-          kind: "test", lineId: l.id, count: 1, station: stIdx + 1,
-          start: round1(t), duration: p.testSeconds, auto: true,
-        })
+      // 试运行需解除制动：终态失衡超出允许范围时不安排（由检查页提示）
+      const brick = brickOf(sheet, l);
+      const finalImbalance = Math.abs(
+        stageWeight(l) - targetBricks(sheet, l) * (brick ? brick.weight : 0)
       );
-      t += p.testSeconds;
+      if (finalImbalance <= p.maxImbalance + 1e-9) {
+        newSteps.push(
+          newStep({
+            kind: "test", lineId: l.id, count: 1, station: stIdx + 1,
+            start: round1(t), duration: p.testSeconds, auto: true,
+          })
+        );
+        t += p.testSeconds;
+      }
       stationAvail[stIdx] = t;
       lineAvail[l.id] = t;
     }
@@ -547,12 +633,25 @@
   }
 
   // ----------------------------------------------------------
-  // 回放：t 时刻的各行状态（砖数按步骤进度插值）
+  // 回放：t 时刻的各行状态（砖数按步骤进度插值；
+  // 已执行区间锚定执行时快照 / 执行基准，还原执行当时的状态）
   // ----------------------------------------------------------
   function replayState(sheet, t) {
     sheet = normalize(sheet);
     const bricks = {};
     for (const l of sheet.lines) bricks[l.id] = l.initialBricks;
+    // 已执行区间的边界（最后一个已完成步骤的结束时刻）
+    let doneEnd = -1;
+    for (const s of sheet.steps)
+      if (s.status === "done") doneEnd = Math.max(doneEnd, s.start + s.duration);
+    // 每行在 t 之前最近的一个执行快照
+    const snaps = {};
+    if (t <= doneEnd + 1e-9) {
+      for (const s of orderedSteps(sheet)) {
+        if (s.status === "done" && s.snap && s.start + s.duration <= t + 1e-9)
+          snaps[s.lineId] = s.snap;
+      }
+    }
     for (const s of orderedSteps(sheet)) {
       if (s.kind !== "add" && s.kind !== "remove") continue;
       const prog = clamp((t - s.start) / s.duration, 0, 1);
@@ -562,9 +661,32 @@
     }
     const out = {};
     for (const l of sheet.lines) {
-      const st = snapshot(sheet, l, Math.round(bricks[l.id] * 100) / 100);
-      st.bricksExact = bricks[l.id];
-      out[l.id] = st;
+      const brick = brickOf(sheet, l);
+      const snap = snaps[l.id];
+      const base = sheet.execBase ? sheet.execBase[l.id] : null;
+      // 舞台侧重量与砖重的取值：快照 > 执行基准 > 当前数据
+      let stageW, bw;
+      if (snap) {
+        stageW = snap.stageW;
+        bw = snap.brickW;
+      } else if (t <= doneEnd + 1e-9 && base && base.stageW != null) {
+        stageW = base.stageW;
+        bw = base.brickW != null ? base.brickW : brick ? brick.weight : 0;
+      } else {
+        stageW = stageWeight(l);
+        bw = brick ? brick.weight : 0;
+      }
+      const b = Math.round(bricks[l.id] * 100) / 100;
+      const cwW = Math.round(b * bw * 10) / 10;
+      out[l.id] = {
+        lineId: l.id,
+        bricks: b,
+        bricksExact: bricks[l.id],
+        stageW,
+        cwW,
+        imbalance: Math.round(Math.abs(stageW - cwW) * 10) / 10,
+        remain: Math.round((l.arborCapacity - cwW) * 10) / 10,
+      };
     }
     return out;
   }

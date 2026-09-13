@@ -314,7 +314,7 @@ def canon(obj):
 
 
 def done_steps_intact(old_data, new_data):
-    """执行中：已完成步骤（含其确认时间）不得被改写或删除。"""
+    """执行中：已完成步骤（含其确认时间与执行快照）不得被改写或删除。"""
     new_by_id = {s.get("id"): s for s in (new_data.get("steps") or [])}
     for s in old_data.get("steps") or []:
         if s.get("status") != "done":
@@ -322,7 +322,7 @@ def done_steps_intact(old_data, new_data):
         n = new_by_id.get(s.get("id"))
         if n is None or n.get("status") != "done":
             return False
-        for k in ("kind", "lineId", "count", "station", "start", "duration", "doneAt"):
+        for k in ("kind", "lineId", "count", "station", "start", "duration", "doneAt", "snap"):
             if n.get(k) != s.get(k):
                 return False
     return True
@@ -421,6 +421,11 @@ def update_cw_sheet(sid):
         if any(s.get("status") != "done" for s in steps):
             return jsonify({"error": "仍有未执行的步骤，不能归档完成"}), 409
 
+    # 进入执行时记录各行基准（舞台侧重量/砖重），供回放还原执行当时状态
+    if new_status == "running" and cur_status != "running" and isinstance(new_data, dict):
+        new_data = dict(new_data)
+        new_data["execBase"] = cw_exec_base(new_data)
+
     name = (body.get("name") or row["name"])[:80]
     scene = (body.get("scene", row["scene"]) or "")[:80]
     metrics = body.get("metrics", json.loads(row["metrics_json"]))
@@ -456,6 +461,57 @@ def _step_order_key(step):
     return (float(step.get("start") or 0),)
 
 
+def _cw_brick_weight(data, line):
+    specs = data.get("bricks") or []
+    spec = next((b for b in specs if b.get("id") == line.get("brickId")), None)
+    if spec is None and specs:
+        spec = specs[0]
+    return float(spec.get("weight") or 0) if spec else 0.0
+
+
+def cw_exec_base(data):
+    """进入执行时各行的基准状态：舞台侧重量与砖重（回放的历史锚点）。"""
+    base = {}
+    for line in data.get("lines") or []:
+        base[line.get("id")] = {
+            "stageW": round(
+                float(line.get("pipeWeight") or 0) + float(line.get("propWeight") or 0), 1
+            ),
+            "brickW": _cw_brick_weight(data, line),
+        }
+    return base
+
+
+def cw_step_snap(data, step):
+    """确认步骤时的执行快照：该步完成后对应吊杆行的两侧重量与失衡量。"""
+    line = next(
+        (l for l in (data.get("lines") or []) if l.get("id") == step.get("lineId")), None
+    )
+    if line is None:
+        return None
+    bw = _cw_brick_weight(data, line)
+    bricks = int(line.get("initialBricks") or 0)
+    done = [s for s in (data.get("steps") or []) if s.get("status") == "done"]
+    done.sort(key=_step_order_key)
+    for s in done:
+        if s.get("lineId") != line.get("id"):
+            continue
+        if s.get("kind") == "add":
+            bricks += int(s.get("count") or 0)
+        elif s.get("kind") == "remove":
+            bricks = max(0, bricks - int(s.get("count") or 0))
+    stage_w = float(line.get("pipeWeight") or 0) + float(line.get("propWeight") or 0)
+    cw_w = bricks * bw
+    return {
+        "bricks": bricks,
+        "stageW": round(stage_w, 1),
+        "cwW": round(cw_w, 1),
+        "imbalance": round(abs(stage_w - cw_w), 1),
+        "remain": round(float(line.get("arborCapacity") or 0) - cw_w, 1),
+        "brickW": bw,
+    }
+
+
 @app.post("/api/cw/sheets/<int:sid>/confirm")
 def confirm_cw_step(sid):
     """执行中顺序确认：只允许确认时间轴上最早的一个待执行步骤。"""
@@ -472,7 +528,16 @@ def confirm_cw_step(sid):
         return jsonify({"error": "没有待执行的步骤"}), 409
     nxt = min(pending, key=_step_order_key)
     nxt["status"] = "done"
-    nxt["doneAt"] = int(time.time() * 1000)
+    # doneAt 严格单调递增：同一毫秒内连续确认也能稳定区分先后
+    max_done = max(
+        [int(s.get("doneAt") or 0) for s in steps if s.get("id") != nxt.get("id")]
+        or [0]
+    )
+    nxt["doneAt"] = max(int(time.time() * 1000), max_done + 1)
+    # 执行时快照：临时变更只重算未完成部分，完成步骤保留当时状态
+    snap = cw_step_snap(data, nxt)
+    if snap is not None:
+        nxt["snap"] = snap
     now = int(time.time() * 1000)
     db.execute(
         "UPDATE cw_sheets SET data_json=?, updated_at=? WHERE id=?",
@@ -496,9 +561,15 @@ def undo_cw_step(sid):
     done = [s for s in steps if s.get("status") == "done"]
     if not done:
         return jsonify({"error": "没有可撤回的步骤"}), 409
-    last = max(done, key=lambda s: float(s.get("doneAt") or 0))
+    # 稳定取消最后确认的步骤：doneAt 单调递增，旧数据并列时按时间轴位置兜底，
+    # 保证撤回后完成记录始终连续
+    last = max(
+        done,
+        key=lambda s: (float(s.get("doneAt") or 0), float(s.get("start") or 0)),
+    )
     last["status"] = "pending"
     last.pop("doneAt", None)
+    last.pop("snap", None)
     now = int(time.time() * 1000)
     db.execute(
         "UPDATE cw_sheets SET data_json=?, updated_at=? WHERE id=?",

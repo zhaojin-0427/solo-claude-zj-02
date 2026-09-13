@@ -453,8 +453,11 @@
         });
       if (ss)
         html +=
-          '<div class="form-row"><label>完成后状态</label><span class="mono" style="font-size:12px">' +
-          ss.bricks + " 块 ｜ 失衡 " + ss.imbalance + "kg ｜ 架余量 " + ss.remain + "kg</span></div>";
+          '<div class="form-row"><label>' +
+          (stp.status === "done" && stp.snap ? "执行时快照" : "完成后状态") +
+          '</label><span class="mono" style="font-size:12px">' +
+          ss.bricks + " 块 ｜ 舞台侧 " + ss.stageW + "kg ｜ 失衡 " + ss.imbalance +
+          "kg ｜ 架余量 " + ss.remain + "kg</span></div>";
       if (state.status === "draft" && stp.status !== "done")
         html +=
           '<div class="btn-row"><button class="danger" id="btnDelStep">删除该步骤</button></div>';
@@ -635,6 +638,7 @@
     brake_release: "失衡解除制动",
     imbalance: "失衡超限",
     target: "未达目标",
+    no_test: "未试运行",
   };
   function renderCheck() {
     const a = state.analysis;

@@ -182,5 +182,83 @@ function line(o) {
   ok(steps.some((x) => x.lineId === "L2"), "未锁定行正常编排");
 }
 
+// ---------- 允许失衡范围实际参与排序 ----------
+{
+  // A：舞台侧 400，8→16 块（4 步）；B：舞台侧 325，8→13 块（3 步）
+  const build = (K) => {
+    let s = baseSheet();
+    s.params.stationCount = 1; // 单工位，顺序完全可见
+    s.params.maxImbalance = K;
+    const A = line({ id: "A", pipeWeight: 0, propWeight: 400, initialBricks: 8 });
+    const B = line({ id: "B", pipeWeight: 0, propWeight: 325, initialBricks: 8 });
+    s.lines.push(A, B);
+    return CW.normalize(s);
+  };
+  const seqOf = (s) =>
+    CW.planSteps(s)
+      .filter((x) => x.kind === "add")
+      .sort((a, b) => a.start - b.start)
+      .map((x) => x.lineId)
+      .join("");
+  // 宽松（200kg）：两行都在范围内 → 轮转交错
+  ok(seqOf(build(200)) === "ABABABA", "允许 200kg 时交错轮转，实际 " + seqOf(build(200)));
+  // 收紧（10kg）：A 需连续 4 步回安全区，B 需 3 步 → 按超出量分组前置
+  ok(seqOf(build(10)) === "AAAABBB", "收紧到 10kg 后按回安全区步数分组，实际 " + seqOf(build(10)));
+}
+
+// ---------- 终态失衡超范围不排试运行 ----------
+{
+  const build = (K) => {
+    let s = baseSheet();
+    s.params.maxImbalance = K;
+    // 容量受限：舞台侧 240，容量 100 → 最多 4 块=100kg，终态失衡 140
+    const l1 = line({ id: "L1", pipeWeight: 40, propWeight: 200, initialBricks: 0, arborCapacity: 100 });
+    // 正常行：舞台侧 150 → 6 块=150kg，终态平衡
+    const l2 = line({ id: "L2", pipeWeight: 40, propWeight: 110, initialBricks: 0 });
+    s.lines.push(l1, l2);
+    return CW.normalize(s);
+  };
+  let steps = CW.planSteps(build(25));
+  ok(!steps.some((x) => x.kind === "test" && x.lineId === "L1"), "容量受限行失衡 140>25 不排试运行");
+  ok(steps.some((x) => x.kind === "review" && x.lineId === "L1"), "容量受限行仍排复核");
+  ok(steps.some((x) => x.kind === "test" && x.lineId === "L2"), "可达平衡的行正常排试运行");
+  let a = CW.simulate(Object.assign(build(25), { steps }));
+  ok(!a.warnings.some((w) => w.type === "brake_release"), "不再出现解除制动高危");
+  ok(a.warnings.some((w) => w.type === "no_test" && w.lineId === "L1"), "提示终态失衡未安排试运行");
+  // 放宽到 200kg：140 在范围内 → 恢复排试运行
+  steps = CW.planSteps(build(200));
+  ok(steps.some((x) => x.kind === "test" && x.lineId === "L1"), "允许 200kg 时恢复排试运行");
+}
+
+// ---------- 完成步骤保留执行时快照 ----------
+{
+  let s = baseSheet();
+  const l1 = line({ id: "L1", pipeWeight: 40, propWeight: 110, initialBricks: 2 });
+  s.lines.push(l1);
+  s = CW.normalize(s);
+  s.steps = [
+    CW.newStep({
+      id: "s1", kind: "add", lineId: "L1", count: 2, start: 0, duration: 20, status: "done",
+      snap: { bricks: 4, stageW: 150, cwW: 100, imbalance: 50, remain: 200, brickW: 25 },
+    }),
+    CW.newStep({ id: "s2", kind: "add", lineId: "L1", count: 2, start: 20, duration: 20 }),
+  ];
+  // 执行中临时变更吊物 110 → 160
+  s.lines[0].propWeight = 160;
+  const a = CW.simulate(s);
+  ok(a.stepStates.s1.stageW === 150 && a.stepStates.s1.imbalance === 50,
+    "已完成步骤保留快照（舞台侧150/失衡50），实际 " + a.stepStates.s1.stageW + "/" + a.stepStates.s1.imbalance);
+  ok(a.stepStates.s2.stageW === 190, "未完成步骤按变更后重算（190），实际 " + a.stepStates.s2.stageW);
+  // 回放：已执行区间锚定快照，未执行区间用当前数据
+  const r10 = CW.replayState(s, 10).L1;
+  ok(r10.stageW === 150, "回放 10s（已执行区间）舞台侧=快照 150，实际 " + r10.stageW);
+  const r30 = CW.replayState(s, 30).L1;
+  ok(r30.stageW === 190, "回放 30s（未执行区间）舞台侧=当前 190，实际 " + r30.stageW);
+  // 执行基准：进入执行时的初始状态锚点
+  s.execBase = { L1: { stageW: 150, brickW: 25 } };
+  const r5 = CW.replayState(s, 5).L1;
+  ok(r5.stageW === 150, "回放 5s（首步完成前）锚定执行基准 150，实际 " + r5.stageW);
+}
+
 console.log("\n通过 " + pass + "，失败 " + fail);
 process.exit(fail ? 1 : 0);
