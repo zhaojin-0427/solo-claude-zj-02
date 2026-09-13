@@ -272,9 +272,16 @@
           e.preventDefault();
           return;
         }
-        // 其余位置按下：拖动回放游标
+        // 图例与告警带有自己的点选逻辑，不进入单击/拖动判定
         if (t.closest && t.closest(".es-legend-item")) return;
-        drag = { kind: "seek" };
+        if (t.classList && t.classList.contains("warn-strip")) return;
+        // 普通位置按下：先记为待判定，移动超阈值=拖动游标，未移动松开=单击选触发时刻
+        const r = svg.getBoundingClientRect();
+        drag = {
+          kind: "maybe",
+          x0: e.clientX,
+          t0: Math.max(0, this.xToTime(e.clientX - r.left)),
+        };
         e.preventDefault();
       });
       window.addEventListener("mousemove", (e) => {
@@ -283,11 +290,22 @@
         const t = Math.max(0, Math.round(this.xToTime(e.clientX - r.left) * 10) / 10);
         if (drag.kind === "trigger") {
           this.handlers.onTrigger && this.handlers.onTrigger(t);
-        } else {
+        } else if (drag.kind === "maybe") {
+          if (Math.abs(e.clientX - drag.x0) > 4) {
+            drag.kind = "seek";
+            this.handlers.onSeek && this.handlers.onSeek(t);
+          }
+        } else if (drag.kind === "seek") {
           this.handlers.onSeek && this.handlers.onSeek(t);
         }
       });
-      window.addEventListener("mouseup", () => (drag = null));
+      window.addEventListener("mouseup", () => {
+        if (drag && drag.kind === "maybe") {
+          const t = Math.round(drag.t0 * 10) / 10;
+          this.handlers.onChartClick && this.handlers.onChartClick(t);
+        }
+        drag = null;
+      });
     },
   };
 

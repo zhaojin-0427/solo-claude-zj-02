@@ -147,6 +147,16 @@
     const atB = frozenState(proj, batten, brakeStart, T);
     const a = Math.max(0.05, brake.decel);
     const v = atB.vel;
+    // 延迟期内的自然停止时刻：活动提示窗口结束即沿原曲线停稳
+    // （与 frozenState 的提示窗口模型一致，不晚于制动介入）
+    let restTime = T;
+    const cue = atT.cue;
+    if (cue && !cue.dwell) restTime = Math.min(cue.start + cue.duration, brakeStart);
+    // 触发后是否有实际运动：触发时有速度 / 延迟期有位移 / 介入时仍有速度
+    const moved =
+      Math.abs(atT.vel) > 1e-6 ||
+      Math.abs(atB.pos - atT.pos) > 1e-6 ||
+      Math.abs(v) > 1e-6;
     const base = {
       battenId: batten.id,
       name: batten.name,
@@ -158,25 +168,32 @@
       posAtBrake: atB.pos,
       velAtBrake: v,
     };
-    if (Math.abs(v) < 1e-6) {
+    if (Math.abs(v) >= 1e-6) {
+      // 制动介入时仍在运动：应急减速制动
+      const dt = Math.abs(v) / a;
+      const dist = (v * v) / (2 * a);
       return Object.assign(base, {
-        moving: false, stopTime: brakeStart, brakeDist: 0, finalPos: atB.pos,
+        moving: true,
+        braked: true,
+        stopTime: brakeStart + dt,
+        brakeDist: dist,
+        finalPos: atB.pos + Math.sign(v) * dist,
       });
     }
-    const dt = Math.abs(v) / a;
-    const dist = (v * v) / (2 * a);
+    // 制动介入前已沿原曲线停下（或本就静止）：停止时刻取自然停稳时刻
     return Object.assign(base, {
-      moving: true,
-      stopTime: brakeStart + dt,
-      brakeDist: dist,
-      finalPos: atB.pos + Math.sign(v) * dist,
+      moving: moved,
+      braked: false,
+      stopTime: moved ? restTime : T,
+      brakeDist: 0,
+      finalPos: atB.pos,
     });
   }
 
   // 急停轨迹：t ≥ T 时吊杆位置
   function estopPos(proj, batten, plan, T, t) {
     if (t <= plan.brakeStart) return frozenState(proj, batten, t, T).pos;
-    if (!plan.moving) return plan.finalPos;
+    if (!plan.braked) return plan.finalPos;
     const tau = t - plan.brakeStart;
     const v0 = plan.velAtBrake;
     const a = plan.decel;
@@ -206,11 +223,13 @@
     const planOf = {};
     for (const pl of plans) planOf[pl.battenId] = pl;
 
-    const moving = plans.filter((pl) => pl.moving);
-    const stoppedAt = moving.length ? Math.max(...moving.map((pl) => pl.stopTime)) : T;
-    const maxBrakeDist = moving.length ? Math.max(...moving.map((pl) => pl.brakeDist)) : 0;
+    // 全部停止：延迟期自然停稳与应急制动停稳都计入
+    const stoppedAt = plans.length ? Math.max(T, ...plans.map((pl) => pl.stopTime)) : T;
+    const maxBrakeDist = plans.length ? Math.max(...plans.map((pl) => pl.brakeDist)) : 0;
+    const movingCount = plans.filter((pl) => pl.moving).length;
 
     // ---- 采样定位：越程 / 扫掠相交 / 侵入通行净空 ----
+    // 窗口外延一个步长：停稳后的最终位置本身也参与风险定位
     const warnings = [];
     const flush = {};
     function add(type, severity, key, t, battenIds, message, extra) {
@@ -239,7 +258,7 @@
         if (a0 < b1 && b0 < a1) pairs.push([battens[i], battens[j]]);
       }
 
-    for (let t = T; t <= stoppedAt + DT * 0.5 + EPS; t += DT) {
+    for (let t = T; t <= stoppedAt + DT + EPS; t += DT) {
       const posOf = {};
       for (const b of battens) posOf[b.id] = estopPos(proj, b, planOf[b.id], T, t);
 
@@ -387,7 +406,7 @@
         maxBrakeDist: round2(maxBrakeDist),
         allStopTime: round2(stoppedAt - T),
         stoppedAt: round2(stoppedAt),
-        movingCount: moving.length,
+        movingCount: movingCount,
         byType: warnings.reduce((m, w) => ((m[w.type] = (m[w.type] || 0) + 1), m), {}),
       },
     };

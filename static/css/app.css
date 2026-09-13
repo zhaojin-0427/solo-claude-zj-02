@@ -459,6 +459,7 @@ main {
 }
 #esChartSvg { display: block; }
 .tl-field { color: var(--muted); font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+.tl-hint { color: var(--muted); font-size: 11px; opacity: 0.8; }
 .tl-field input[type="number"] {
   width: 62px; background: var(--panel); color: var(--text);
   border: 1px solid var(--line); border-radius: 4px; padding: 2px 5px; font-size: 12px;

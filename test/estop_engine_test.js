@@ -186,6 +186,49 @@ function demoDrill(trigger) {
   ok(sc.rows.some((r) => r.high === 0 || r.high < sc.rows[0].high), "存在相对安全的触发点");
 }
 
+// ---------- 延迟期自然停止：触发时仍运动，但提示在制动介入前沿原曲线结束 ----------
+{
+  const p = E.emptyProject();
+  Object.assign(p.stage, { depth: 14, height: 12, passageY: 2.5, totalTime: 60 });
+  const b1 = E.newBatten(3, 1); b1.id = "b1"; b1.name = "景杆";
+  Object.assign(b1, { lowLimit: 0.3, highLimit: 11, initialPos: 10.5 });
+  b1.prop = { id: "p1", name: "景片", kind: "scenery", width: 6, height: 4, weight: 100, hangingHeight: 10.5, clearance: 0.3 };
+  const b2 = E.newBatten(12, 2); b2.id = "b2"; b2.name = "静止杆";
+  Object.assign(b2, { lowLimit: 0.3, highLimit: 11, initialPos: 10.5 });
+  p.battens.push(b1, b2);
+  // 通行时段覆盖延迟期；提示 8→11.6s 降到 6.453m（吊物底 2.453m ＜ 净空 2.5m）
+  p.occupancies.push(E.newOcc({ id: "o1", name: "通行", start: 9, duration: 4, x: 1.5, width: 7.5 }));
+  p.cues.push(E.newCue({ id: "c1", battenId: "b1", start: 8, duration: 3.6, fromPos: 8, toPos: 6.453 }));
+  const d = ES.newDrill("t");
+  d.project = E.normalizeProject(p);
+  d.trigger = 11; // 制动介入 11+0.4+0.3=11.7，晚于提示结束 11.6 → 延迟期自然停止
+  d.params.responseDelay = 0.4;
+  d.brakes = { b1: { delay: 0.3, decel: 1.2 } };
+  const r = ES.simulate(ES.normalize(d));
+  const pl = r.plans.find((x) => x.battenId === "b1");
+  ok(pl.velAtTrigger < 0, "触发时仍在运动，vel=" + pl.velAtTrigger.toFixed(3));
+  ok(pl.moving === true && pl.braked === false,
+    "延迟期运动但未制动：moving=true, braked=false");
+  ok(approx(pl.stopTime, 11.6, 1e-6), "停止时刻=原曲线停稳 11.6s，实际 " + pl.stopTime);
+  ok(pl.brakeDist === 0, "未触发应急制动，制动距离 0");
+  ok(approx(pl.finalPos, 6.453, 1e-6), "最终高度=提示终点 6.453m");
+  ok(approx(r.stoppedAt, 11.6, 1e-6), "stoppedAt=11.6s，实际 " + r.stoppedAt);
+  ok(approx(r.summary.allStopTime, 0.6, 1e-6), "全部停止用时 0.6s（非 0），实际 " + r.summary.allStopTime);
+  ok(r.summary.movingCount === 1, "运动吊杆计 1（静止杆不计），实际 " + r.summary.movingCount);
+  const w = r.warnings.find((x) => x.type === "passage");
+  ok(!!w && w.severity === "high", "延迟期吊物底侵入通行净空 → 高危告警");
+  ok(w && (w.battenIds || []).indexOf("b1") >= 0, "告警点名运动杆");
+  const card = r.cards.find((x) => x.battenId === "b1");
+  ok(card.moving === true, "检查卡标记为运动（非静止）");
+  ok(approx(card.stopAfter, 0.6, 1e-6), "检查卡停止用时 0.6s，实际 " + card.stopAfter);
+  ok(card.level === "danger", "检查卡级别=高危");
+  ok(approx(card.finalLowest, 2.453, 5e-3), "检查卡吊物底 2.453m（保留两位小数），实际 " + card.finalLowest);
+  const card2 = r.cards.find((x) => x.battenId === "b2");
+  ok(card2.moving === false && card2.stopAfter === 0, "无提示静止杆：moving=false，停止用时 0");
+  // 停稳后的最终位置本身参与风险定位（采样窗口外延）
+  ok(w && w.end >= 11.6 - 1e-6, "告警区间覆盖停稳时刻，实际止于 " + (w && w.end));
+}
+
 // ---------- 规范化 / 制动参数覆盖 / 指纹 ----------
 {
   const d = ES.normalize(ES.newDrill("x"));

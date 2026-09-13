@@ -135,6 +135,24 @@ setTimeout(async () => {
   assert(warns1.length >= 3, "13s 触发告警≥3（双杆侵入净空+扫掠），实际 " + warns1.length);
   assert($("#cursorClock").textContent.indexOf("急停 13.0 s") >= 0, "时钟显示急停 13.0s");
 
+  // 3b) 单击轨迹图普通位置直接选中触发时刻（拖动与数值输入行为保留）
+  const chartSvg = $("#esChartSvg");
+  const clickAt = (clientX) => {
+    chartSvg.dispatchEvent(new window.MouseEvent("mousedown", { clientX, bubbles: true }));
+    window.dispatchEvent(new window.MouseEvent("mouseup", { clientX, bubbles: true }));
+  };
+  clickAt(40 + 12 * 10); // 图左边距 40 + 12s × 10px/s → 12.0s
+  assert(Number($("#triggerNum").value) === 12,
+    "单击 12.0s 直接选中触发时刻，实际 " + $("#triggerNum").value);
+  // 拖动（按下→移动→松开）仍是游标定位，不改触发时刻
+  chartSvg.dispatchEvent(new window.MouseEvent("mousedown", { clientX: 200, bubbles: true }));
+  window.dispatchEvent(new window.MouseEvent("mousemove", { clientX: 260, bubbles: true }));
+  window.dispatchEvent(new window.MouseEvent("mouseup", { clientX: 260, bubbles: true }));
+  assert(Number($("#triggerNum").value) === 12, "拖动普通位置只动游标，触发时刻不变");
+  assert($("#cursorClock").textContent.indexOf("游标 22.0 s") >= 0,
+    "拖动后游标到 22.0s，时钟：" + $("#cursorClock").textContent);
+  window.ESChart.handlers.onTrigger(13); // 恢复 13s 继续后续步骤
+
   // 4) 点选告警 → 跳到吊杆与风险时刻
   const firstWarn = $("#pageCheck .warn-item");
   firstWarn.click();

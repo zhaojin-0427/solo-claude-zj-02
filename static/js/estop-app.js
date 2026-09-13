@@ -789,6 +789,18 @@
     onTrigger(t) {
       setTrigger(t);
     },
+    onChartClick(t) {
+      // 单击普通位置：草稿直接选中触发时刻；已冻结单据则作为游标定位
+      if (editable()) {
+        setTrigger(t);
+        return;
+      }
+      stopPlay();
+      state.cursor = t;
+      renderViewsOnly();
+      const slider = $("#replaySlider");
+      if (slider) slider.value = String(Math.round(t * 10));
+    },
     onSeek(t) {
       stopPlay();
       state.cursor = t;
